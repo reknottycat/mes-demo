@@ -5,6 +5,7 @@
 - The overview is the supervisor’s visual home. Queue and scan surfaces are operator execution tools.
 
 ## Command feedback
+- Shared feedback tones: info (blue) for gateway/connectivity and neutral processing; success (green) for a completed normal action; warning (yellow) for waiting/attention; danger (red) for ANDON/blockage. Orange stays reserved for the active production tempo and primary command.
 - All changing commands show one stable, visible status message.
 - A busy/disabled command keeps its dimensions and cannot create a duplicate local request.
 - The same action name is used in the command, status message, and audit event.
