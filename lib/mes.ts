@@ -1,3 +1,5 @@
+import type { MachineTelemetry } from "./machine-signal";
+
 export type MachineState = "IDLE" | "RUNNING" | "ALARM";
 export type JobState = "READY" | "BOUND" | "RUNNING" | "INTERRUPTED" | "FINISHED";
 export type AndonState = "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
@@ -22,6 +24,7 @@ export type MesState = {
   jobState: JobState;
   andonState: AndonState | null;
   assemblyReleased: boolean;
+  telemetry: MachineTelemetry;
   events: MesEvent[];
 };
 
@@ -67,6 +70,15 @@ export function createDemoState(at = "2026-08-30T14:08:00.000Z"): MesState {
     jobState: "READY",
     andonState: null,
     assemblyReleased: false,
+    telemetry: {
+      source: "PROTOFORGE / HTTP bridge",
+      programNo: "O1208",
+      spindleRpm: 0,
+      feedRate: 0,
+      cycleTimeSec: 96,
+      lastSignalAt: at,
+      signalSequence: 0,
+    },
     events: [
       event("seed-material", "备料完成", "前序工序完成 6 / 20，CNC 工位等待绑定。", "green", at),
       event("seed-dispatch", "工单已释放", "WO-240830-017 的 CNC 精加工任务已派至王工。", "neutral", at),
