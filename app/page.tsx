@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 
-type PageKey = "dashboard" | "order" | "queue" | "scan";
+type PageKey = "dashboard" | "order" | "queue" | "scan" | "cnc";
 type Tone = "green" | "orange" | "red" | "yellow";
 type MachineState = "IDLE" | "RUNNING" | "ALARM";
 type JobState = "READY" | "BOUND" | "RUNNING" | "INTERRUPTED" | "FINISHED";
 type AndonState = "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
+type MachineSignalKind = "MACHINE_RUNNING" | "CYCLE_COMPLETED" | "MACHINE_ALARM";
+type MachineTelemetry = { source: string; programNo: string; spindleRpm: number; feedRate: number; cycleTimeSec: number; lastSignalAt: string; signalSequence: number };
 
 type EventItem = {
   time: string;
@@ -20,6 +22,7 @@ const navigation: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "order", label: "订单与工序", icon: "02" },
   { key: "queue", label: "操作员任务", icon: "03" },
   { key: "scan", label: "扫码报工", icon: "04" },
+  { key: "cnc", label: "虚拟 CNC 工位", icon: "05" },
 ];
 
 const initialEvents: EventItem[] = [
@@ -66,6 +69,8 @@ export default function Page() {
   const [events, setEvents] = useState<EventItem[]>(initialEvents);
   const [scanCode, setScanCode] = useState("TASK-CNC-017");
   const [toast, setToast] = useState("模拟网关在线，等待 CNC-01 的执行信号。");
+  const [pending, setPending] = useState(false);
+  const [telemetry, setTelemetry] = useState<MachineTelemetry>({ source: "PROTOFORGE / HTTP bridge", programNo: "O1208", spindleRpm: 0, feedRate: 0, cycleTimeSec: 96, lastSignalAt: "", signalSequence: 0 });
 
   const planned = 20;
   const progress = Math.round((completed / planned) * 100);
@@ -79,6 +84,7 @@ export default function Page() {
   }
 
   function syncRemote(nextCommand: Record<string, unknown>) {
+    setPending(true);
     void fetch("/api/demo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -93,9 +99,11 @@ export default function Page() {
         setJobState(next.jobState);
         setAndonState(next.andonState);
         setEvents(next.events);
+        setTelemetry(next.telemetry);
         setToast(next.events[0]?.title ? next.events[0].title + "： " + next.events[0].detail : "状态已更新。");
       })
-      .catch((error: Error) => setToast(error.message));
+      .catch((error: Error) => setToast(error.message))
+      .finally(() => setPending(false));
   }
 
   useEffect(() => {
@@ -108,6 +116,7 @@ export default function Page() {
         setJobState(next.jobState);
         setAndonState(next.andonState);
         setEvents(next.events);
+        setTelemetry(next.telemetry);
       })
       .catch((error: Error) => setToast(error.message));
   }, []);
@@ -152,6 +161,23 @@ export default function Page() {
   function resetDemo() {
     syncRemote({ type: "RESET_DEMO" });
     setPage("dashboard");
+  }
+
+  function sendMachineSignal(kind: MachineSignalKind) {
+    const signalId = commandId();
+    const alarmCode = kind === "MACHINE_ALARM" ? "SPINDLE_OVERLOAD" : undefined;
+    const payload = { eventId: signalId, machineId: "CNC-01", kind, source: "PROTOFORGE SIM-01", programNo: "O1208", spindleRpm: kind === "MACHINE_ALARM" ? 0 : 4200, feedRate: kind === "MACHINE_ALARM" ? 0 : 680, cycleTimeSec: 96, alarmCode };
+    setPending(true);
+    void fetch("/api/machine-signal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "设备信号未被接收。");
+        const next = body.state;
+        setCompleted(next.completed); setBinding(next.binding); setJobState(next.jobState); setAndonState(next.andonState); setEvents(next.events); setTelemetry(next.telemetry);
+        setToast(next.events[0]?.title ? next.events[0].title + "： " + next.events[0].detail : "设备信号已接收。");
+      })
+      .catch((error: Error) => setToast(error.message))
+      .finally(() => setPending(false));
   }
 
   const currentMachineTone: Tone = machineState === "ALARM" ? "red" : machineState === "RUNNING" ? "orange" : "green";
@@ -285,14 +311,14 @@ export default function Page() {
           <div className="action-console">
             <h3>模拟设备网关</h3>
             <p>{toast}</p>
-            {jobState === "READY" || jobState === "BOUND" ? <button className="primary-button" onClick={startJob} disabled={!canStart}>开始加工</button> : null}
-            {jobState === "RUNNING" ? <button className="primary-button" onClick={signalCycle} disabled={!canCycle}>上报一个加工周期（{completed}/{planned}）</button> : null}
+            {jobState === "READY" || jobState === "BOUND" ? <button className="primary-button" onClick={() => sendMachineSignal("MACHINE_RUNNING")} disabled={!canStart || pending}>启动虚拟 CNC 并开始加工</button> : null}
+            {jobState === "RUNNING" ? <button className="primary-button" onClick={() => sendMachineSignal("CYCLE_COMPLETED")} disabled={!canCycle || pending}>接收一个 CNC 周期（{completed}/{planned}）</button> : null}
             {andonState === "OPEN" ? <button className="primary-button" onClick={acknowledgeAndon}>班组长确认 ANDON</button> : null}
             {andonState === "ACKNOWLEDGED" ? <button className="primary-button" onClick={resolveAndon}>登记处理并解决异常</button> : null}
             {andonState === "RESOLVED" ? <button className="primary-button" onClick={resumeJob}>确认恢复加工</button> : null}
             {jobState === "FINISHED" ? <button className="primary-button" onClick={() => setPage("order")}>查看已释放的下一工序</button> : null}
             <div className="console-actions">
-              <button className="secondary-button" onClick={raiseAndon} disabled={!canRaise}>模拟主轴过载</button>
+              <button className="secondary-button" onClick={() => sendMachineSignal("MACHINE_ALARM")} disabled={!canRaise || pending}>模拟主轴过载</button>
               <button className="secondary-button" onClick={completeJob} disabled={jobState !== "RUNNING" || Boolean(andonState)}>完工报工（补齐至 20）</button>
             </div>
           </div>
@@ -301,10 +327,55 @@ export default function Page() {
     );
   }
 
+  function CncPage() {
+    const signalTime = telemetry.lastSignalAt
+      ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date(telemetry.lastSignalAt))
+      : "尚未接收";
+    const commandLabel = jobState === "BOUND" ? "启动 CNC-01" : jobState === "RUNNING" ? "发送一个加工周期" : jobState === "INTERRUPTED" ? "先完成 ANDON 处置" : jobState === "FINISHED" ? "本任务已完成" : "先扫码绑定任务";
+
+    return (
+      <>
+        <div className="page-toolbar">
+          <div><h2>虚拟 CNC 工位 · CNC-01</h2><p>ProtoForge 兼容信号源。设备只上报事实，JobExecution 决定产量、异常与下一工序。</p></div>
+          <button className="secondary-button" onClick={() => setPage("scan")}>进入扫码报工</button>
+        </div>
+        <div className="cnc-layout">
+          <section className="card cnc-machine">
+            <div className="cnc-machine-head"><div><span className="eyebrow">MACHINE HOST</span><h3 className="mono">CNC-01 / SIM-01</h3></div><StatusBadge tone={currentMachineTone} label={currentMachineLabel} /></div>
+            <div className={"cnc-face " + machineState.toLowerCase()} aria-label={"CNC-01 当前状态：" + currentMachineLabel}>
+              <div className="cnc-ring"><span>{machineState === "RUNNING" ? "RUN" : machineState === "ALARM" ? "ALM" : "RDY"}</span></div>
+              <div><strong>{stateLabel(jobState, andonState)}</strong><small>程序 {telemetry.programNo} · 信号序列 #{telemetry.signalSequence}</small></div>
+            </div>
+            <div className="telemetry-grid">
+              <div><span>主轴</span><strong>{telemetry.spindleRpm.toLocaleString()} <small>rpm</small></strong></div>
+              <div><span>进给</span><strong>{telemetry.feedRate.toLocaleString()} <small>mm/min</small></strong></div>
+              <div><span>标准节拍</span><strong>{telemetry.cycleTimeSec} <small>s</small></strong></div>
+              <div><span>本任务产量</span><strong>{completed} <small>/ {planned}</small></strong></div>
+            </div>
+          </section>
+          <section className="card cnc-console">
+            <div className="section-title"><div><h2>信号控制台</h2><p>演示数据经 <span className="mono">POST /api/machine-signal</span> 进入适配层。</p></div><StatusBadge tone="green" label="HTTP bridge 在线" /></div>
+            <div className="signal-source"><span>数据源</span><strong>{telemetry.source}</strong><small>最后一条信号：{signalTime}</small></div>
+            <div className="signal-actions">
+              <button className="primary-button" onClick={() => jobState === "BOUND" ? sendMachineSignal("MACHINE_RUNNING") : sendMachineSignal("CYCLE_COMPLETED")} disabled={pending || !(jobState === "BOUND" || canCycle)}>{pending ? "正在接收信号…" : commandLabel}</button>
+              <button className="danger-button" onClick={() => sendMachineSignal("MACHINE_ALARM")} disabled={pending || !canRaise}>注入主轴过载报警</button>
+            </div>
+            <div className="signal-contract"><strong>可替换数据源</strong><p>现在：内置 SIM-01 / HTTP。接入 ProtoForge 后，将其 HTTP Webhook 或 OPC UA 订阅映射为同一份 <span className="mono">MachineSignal</span>，页面与业务规则无需改动。</p></div>
+          </section>
+        </div>
+        <section className="card cnc-audit">
+          <div className="section-title"><div><h2>信号审计</h2><p>信号源、工艺程序和 JobExecution 的关联均可复核。</p></div></div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>信号序列</th><th>数据源</th><th>程序</th><th>实际执行</th><th>结果</th></tr></thead><tbody><tr><td className="mono">#{telemetry.signalSequence}</td><td>{telemetry.source}</td><td className="mono">{telemetry.programNo}</td><td className="mono">JE-017</td><td><StatusBadge tone={andonState ? "red" : "green"} label={andonState ? stateLabel(jobState, andonState) : "已由状态机校验"} /></td></tr></tbody></table></div>
+        </section>
+      </>
+    );
+  }
+
   let view: React.ReactNode = <Dashboard />;
   if (page === "order") view = <OrderPage />;
   if (page === "queue") view = <QueuePage />;
   if (page === "scan") view = <ScanPage />;
+  if (page === "cnc") view = <CncPage />;
 
   return (
     <div className="app-shell">
