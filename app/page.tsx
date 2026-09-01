@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 type PageKey = "dashboard" | "order" | "queue" | "scan" | "cnc";
-type Tone = "green" | "orange" | "red" | "yellow";
+type Tone = "blue" | "cyan" | "green" | "orange" | "red" | "yellow";
 type MachineState = "IDLE" | "RUNNING" | "ALARM";
 type JobState = "READY" | "BOUND" | "RUNNING" | "INTERRUPTED" | "FINISHED";
 type AndonState = "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
@@ -69,6 +69,7 @@ export default function Page() {
   const [events, setEvents] = useState<EventItem[]>(initialEvents);
   const [scanCode, setScanCode] = useState("TASK-CNC-017");
   const [toast, setToast] = useState("模拟网关在线，等待 CNC-01 的执行信号。");
+  const [toastTone, setToastTone] = useState<"info" | "danger">("info");
   const [pending, setPending] = useState(false);
   const [telemetry, setTelemetry] = useState<MachineTelemetry>({ source: "PROTOFORGE / HTTP bridge", programNo: "O1208", spindleRpm: 0, feedRate: 0, cycleTimeSec: 96, lastSignalAt: "", signalSequence: 0 });
 
@@ -100,9 +101,10 @@ export default function Page() {
         setAndonState(next.andonState);
         setEvents(next.events);
         setTelemetry(next.telemetry);
+        setToastTone("info");
         setToast(next.events[0]?.title ? next.events[0].title + "： " + next.events[0].detail : "状态已更新。");
       })
-      .catch((error: Error) => setToast(error.message))
+      .catch((error: Error) => { setToastTone("danger"); setToast(error.message); })
       .finally(() => setPending(false));
   }
 
@@ -118,7 +120,7 @@ export default function Page() {
         setEvents(next.events);
         setTelemetry(next.telemetry);
       })
-      .catch((error: Error) => setToast(error.message));
+      .catch((error: Error) => { setToastTone("danger"); setToast(error.message); });
   }, []);
 
   function log(title: string, detail: string, tone: EventItem["tone"] = "neutral") {
@@ -174,9 +176,10 @@ export default function Page() {
         if (!response.ok) throw new Error(body.error || "设备信号未被接收。");
         const next = body.state;
         setCompleted(next.completed); setBinding(next.binding); setJobState(next.jobState); setAndonState(next.andonState); setEvents(next.events); setTelemetry(next.telemetry);
+        setToastTone("info");
         setToast(next.events[0]?.title ? next.events[0].title + "： " + next.events[0].detail : "设备信号已接收。");
       })
-      .catch((error: Error) => setToast(error.message))
+      .catch((error: Error) => { setToastTone("danger"); setToast(error.message); })
       .finally(() => setPending(false));
   }
 
@@ -186,8 +189,8 @@ export default function Page() {
   function Dashboard() {
     return (
       <>
-        <div className={"status-banner " + (andonState ? "alert" : "")} role="status">
-          <strong>{andonState ? "AT RISK" : "LIVE"}</strong>
+        <div className={"status-banner " + (andonState || toastTone === "danger" ? "alert" : "")} role={andonState || toastTone === "danger" ? "alert" : "status"}>
+          <strong>{andonState ? "AT RISK" : toastTone === "danger" ? "ERROR" : "LIVE"}</strong>
           <p>{andonState ? "MES-DEMO-001 存在未关闭 ANDON；CNC 任务已阻塞。" : toast}</p>
         </div>
 
@@ -354,7 +357,7 @@ export default function Page() {
             </div>
           </section>
           <section className="card cnc-console">
-            <div className="section-title"><div><h2>信号控制台</h2><p>演示数据经 <span className="mono">POST /api/machine-signal</span> 进入适配层。</p></div><StatusBadge tone="green" label="HTTP bridge 在线" /></div>
+            <div className="section-title"><div><h2>信号控制台</h2><p>演示数据经 <span className="mono">POST /api/machine-signal</span> 进入适配层。</p></div><StatusBadge tone="blue" label="HTTP bridge 在线" /></div>
             <div className="signal-source"><span>数据源</span><strong>{telemetry.source}</strong><small>最后一条信号：{signalTime}</small></div>
             <div className="signal-actions">
               <button className="primary-button" onClick={() => jobState === "BOUND" ? sendMachineSignal("MACHINE_RUNNING") : sendMachineSignal("CYCLE_COMPLETED")} disabled={pending || !(jobState === "BOUND" || canCycle)}>{pending ? "正在接收信号…" : commandLabel}</button>
